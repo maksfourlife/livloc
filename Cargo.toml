@@ -1,3 +1,7 @@
+[workspace]
+resolver = "3"
+members = ["cli", "proto"]
+
 [package]
 name = "alloc-test2"
 version = "0.1.0"
@@ -5,3 +9,4 @@ edition = "2024"
 
 [dependencies]
 backtrace = "0.3.76"
+borsh = { version = "1.8.1", features = ["derive"] }
