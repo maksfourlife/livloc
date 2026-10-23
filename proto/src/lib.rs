@@ -1,27 +1,87 @@
 use wincode::{SchemaRead, SchemaWrite, WriteResult, io::Writer};
 
+use crate::codec::{Decode, DecodeResult, Encode};
+
+mod codec;
+
 // [tree][[frame1][symbol11...symbol1M][childTree1[...]]...[frameN][frameN1...frameNM][childTreeN[...]]]
 
 #[derive(SchemaRead, SchemaWrite)]
-struct TreeRepr {
+struct TreeHeader {
     size: usize,
     count: usize,
     children: usize,
 }
 
 #[derive(SchemaRead, SchemaWrite)]
-struct FrameRepr {
+struct FrameHeader {
     ip: usize,
     symbol_address: usize,
     symbols: usize,
 }
 
 #[derive(SchemaRead, SchemaWrite)]
-struct SymbolRepr<'a> {
+struct Symbol<'a> {
     name: Option<&'a str>,
     filename: Option<&'a [u8]>,
     colno: Option<u32>,
     lineno: Option<u32>,
+}
+
+impl Encode for TreeHeader {
+    fn encode<W: codec::Write>(&self, buf: &mut W) -> Result<(), W::Err> {
+        self.size.encode(buf)?;
+        self.count.encode(buf)?;
+        self.children.encode(buf)
+    }
+}
+
+impl Decode<'_> for TreeHeader {
+    fn decode(data: &mut &'_ [u8]) -> DecodeResult<Self> {
+        Ok(Self {
+            size: Decode::decode(data)?,
+            count: Decode::decode(data)?,
+            children: Decode::decode(data)?,
+        })
+    }
+}
+
+impl Encode for FrameHeader {
+    fn encode<W: codec::Write>(&self, buf: &mut W) -> Result<(), W::Err> {
+        self.ip.encode(buf)?;
+        self.symbol_address.encode(buf)?;
+        self.symbols.encode(buf)
+    }
+}
+
+impl Decode<'_> for FrameHeader {
+    fn decode(data: &mut &'_ [u8]) -> DecodeResult<Self> {
+        Ok(Self {
+            ip: Decode::decode(data)?,
+            symbol_address: Decode::decode(data)?,
+            symbols: Decode::decode(data)?,
+        })
+    }
+}
+
+impl Encode for Symbol<'_> {
+    fn encode<W: codec::Write>(&self, buf: &mut W) -> Result<(), W::Err> {
+        self.name.encode(buf)?;
+        self.filename.encode(buf)?;
+        self.colno.encode(buf)?;
+        self.lineno.encode(buf)
+    }
+}
+
+impl<'de> Decode<'de> for Symbol<'de> {
+    fn decode(data: &mut &'de [u8]) -> DecodeResult<Self> {
+        Ok(Self {
+            name: Decode::decode(data)?,
+            filename: Decode::decode(data)?,
+            colno: Decode::decode(data)?,
+            lineno: Decode::decode(data)?,
+        })
+    }
 }
 
 /// (children_left, ..)
@@ -60,7 +120,7 @@ impl<'w, W: Writer> TreeSerializer<'w, W> {
         count: usize,
         children: usize,
     ) -> WriteResult<ChildrenSerializer<'w, W>> {
-        let tree_repr = TreeRepr {
+        let tree_repr = TreeHeader {
             size,
             count,
             children,
@@ -90,7 +150,7 @@ impl<'w, W: Writer> ChildrenSerializer<'w, W> {
         symbol_address: usize,
         symbols: usize,
     ) -> WriteResult<FrameSerializer<'w, W>> {
-        let frame_repr = FrameRepr {
+        let frame_repr = FrameHeader {
             ip,
             symbol_address,
             symbols,
@@ -127,7 +187,7 @@ impl<'w, W: Writer> FrameSerializer<'w, W> {
     ) -> WriteResult<()> {
         // TODO: or error
         if let Some(next_symbols_left) = self.symbols_left.checked_sub(1) {
-            let symbol_repr = SymbolRepr {
+            let symbol_repr = Symbol {
                 name,
                 filename,
                 colno,
@@ -149,6 +209,64 @@ impl<'w, W: Writer> FrameSerializer<'w, W> {
         } else {
             Err(self)
         }
+    }
+}
+
+struct TreeDeserializer<'a> {
+    data: &'a [u8],
+    header: TreeHeader,
+}
+
+struct FrameDeserializer<'a> {
+    data: &'a [u8],
+    header: FrameHeader,
+}
+
+impl<'a> TreeDeserializer<'a> {
+    pub fn new(mut data: &'a [u8]) -> DecodeResult<Self> {
+        let header = TreeHeader::decode(&mut data)?;
+        Ok(Self { data, header })
+    }
+
+    pub fn size(&self) -> usize {
+        self.header.size
+    }
+
+    pub fn count(&self) -> usize {
+        self.header.count
+    }
+
+    pub fn begin_frame(mut self) -> DecodeResult<FrameDeserializer<'a>> {
+        // TODO: check children left
+        let header = FrameHeader::decode(&mut self.data)?;
+        Ok(FrameDeserializer {
+            data: self.data,
+            header,
+        })
+    }
+}
+
+impl<'a> FrameDeserializer<'a> {
+    pub fn ip(&self) -> usize {
+        self.header.ip
+    }
+
+    pub fn symbol_address(&self) -> usize {
+        self.header.symbol_address
+    }
+
+    pub fn deserialize_symbol(&mut self) -> DecodeResult<Option<Symbol<'a>>> {
+        let Some(next_symbols) = self.header.symbols.checked_sub(1) else {
+            return Ok(None);
+        };
+        let symbol = Symbol::decode(&mut self.data)?;
+        self.header.symbols = next_symbols;
+        Ok(Some(symbol))
+    }
+
+    pub fn finish(self) -> DecodeResult<TreeDeserializer<'a>> {
+        // TODO: check all symbols deserialized
+        TreeDeserializer::new(self.data)
     }
 }
 
