@@ -3,6 +3,10 @@ name = "livloc-alloc"
 version = "0.1.0"
 edition = "2024"
 
+[[example]]
+name = "start_server"
+required-features = ["server", "rt-multi-thread"]
+
 [features]
 server = [
     "dep:axum",
@@ -12,6 +16,7 @@ server = [
     "dep:tokio",
     "tokio/net",
 ]
+rt-multi-thread = ["tokio/rt-multi-thread"]
 
 [dependencies]
 backtrace = "0.3.76"

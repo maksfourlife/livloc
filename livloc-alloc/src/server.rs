@@ -4,13 +4,14 @@ use axum::{Router, extract::State, response::IntoResponse, routing::get, serve::
 use livloc_proto::codec::Encode;
 use tokio::net::{TcpListener, ToSocketAddrs};
 
-use crate::{LivlocAlloc, tree::Tree};
+use crate::{LivlocAlloc, alloc_guard::AllocGuard, tree::Tree};
 
 impl<T> LivlocAlloc<T> {
     pub fn create_router(&self) -> Router {
         #[axum::debug_handler]
         async fn get_tree(state: State<Arc<Tree>>) -> impl IntoResponse {
             let mut bytes = vec![];
+            let _guard = AllocGuard::enter();
             state
                 .0
                 .to_proto_tree()

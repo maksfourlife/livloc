@@ -4,11 +4,16 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+bytes = "1.12.1"
+clap = { version = "4.6.7", features = ["derive"] }
 color-eyre = "0.6.5"
 crossterm = { version = "0.29.0", default-features = false, features = [
     "event-stream",
 ] }
 eyre = "0.6.14"
 futures = "0.3.34"
+livloc-proto = { version = "0.1.0", path = "../livloc-proto" }
+ouroboros = "0.18.5"
 ratatui = "0.30.2"
+reqwest = { version = "0.13.5", default-features = false }
 tokio = { version = "1.54.0", features = ["rt-multi-thread", "macros", "sync"] }

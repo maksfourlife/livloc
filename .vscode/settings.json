@@ -1,4 +1,13 @@
 {
   "rust-analyzer.cargo.features": "all",
-  "cSpell.words": ["addrs", "borsh", "livloc", "stringn", "wincode"]
+  "cSpell.words": [
+    "addrs",
+    "borsh",
+    "Deque",
+    "livloc",
+    "stringn",
+    "subsec",
+    "uninit",
+    "wincode"
+  ]
 }

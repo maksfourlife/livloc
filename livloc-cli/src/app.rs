@@ -1,15 +1,30 @@
-use crossterm::event::{Event, EventStream};
-use futures::{TryStreamExt, future};
+use std::io;
+
+use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind};
+use futures::{
+    StreamExt,
+    channel::mpsc::{UnboundedSender, unbounded},
+    stream,
+};
 use ratatui::Frame;
 
 pub trait App {
-    type NotifiedFut: Future + Unpin;
-
     fn draw(&mut self, frame: &mut Frame<'_>);
     /// Returns whether should withdraw frame
-    fn handle_event(&mut self, ev: Event) -> bool;
-    /// Wait for redraw notification
-    fn notified(&self) -> Self::NotifiedFut;
+    fn handle_event(&mut self, ev: Event) -> HandleResult;
+    fn register_sender(
+        &mut self,
+        sender: UnboundedSender<AppEvent>,
+    ) -> impl Future<Output = eyre::Result<()>>;
+}
+
+pub enum AppEvent {
+    Redraw,
+}
+
+pub enum HandleResult {
+    Skipped(Event),
+    Processed { redraw: bool },
 }
 
 pub async fn run_async<F, Fut>(f: F) -> Fut::Output
@@ -24,12 +39,19 @@ where
 }
 
 pub async fn run_app(app: &mut impl App) -> eyre::Result<()> {
-    let mut events = EventStream::new();
+    let (sender, receiver) = unbounded();
+    app.register_sender(sender).await?;
+
+    let events = EventStream::new();
+
+    enum EventKind {
+        Term(io::Result<Event>),
+        App(AppEvent),
+    }
+
+    let mut stream = stream::select(events.map(EventKind::Term), receiver.map(EventKind::App));
 
     run_async(|mut term| async move {
-        let mut next_event = events.try_next();
-        let mut notified_redraw = app.notified();
-
         let mut draw = true;
 
         loop {
@@ -37,21 +59,25 @@ pub async fn run_app(app: &mut impl App) -> eyre::Result<()> {
                 term.draw(|frame| app.draw(frame))?;
             }
 
-            let selected = future::select(next_event, notified_redraw).await;
-
-            match selected {
-                future::Either::Left((result, fut)) => {
-                    if let Some(ev) = result? {
-                        draw = app.handle_event(ev);
-                    }
-                    next_event = events.try_next();
-                    notified_redraw = fut;
-                }
-                future::Either::Right((_, fut)) => {
+            match stream.next().await {
+                Some(EventKind::Term(result)) => match app.handle_event(result?) {
+                    HandleResult::Skipped(ev) => match ev {
+                        Event::Key(KeyEvent {
+                            code,
+                            kind: KeyEventKind::Press,
+                            ..
+                        }) => match code {
+                            KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
+                            _ => {}
+                        },
+                        _ => {}
+                    },
+                    HandleResult::Processed { redraw } => draw = redraw,
+                },
+                Some(EventKind::App(AppEvent::Redraw)) => {
                     draw = true;
-                    notified_redraw = app.notified();
-                    next_event = fut;
                 }
+                None => {}
             }
         }
     })

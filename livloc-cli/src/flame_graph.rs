@@ -1,5 +1,6 @@
-use std::cmp;
+use std::{borrow::Cow, cmp};
 
+use livloc_proto::{Frame, Tree};
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
@@ -8,7 +9,7 @@ use ratatui::{
 };
 
 pub struct FlameGraph<'a, T> {
-    pub root: &'a T,
+    root: &'a T,
 }
 
 pub trait Node: Sized {
@@ -18,7 +19,7 @@ pub trait Node: Sized {
 }
 
 pub trait NodeMetadata {
-    fn name(&self) -> &str;
+    fn name(&self) -> Cow<'_, str>;
 }
 
 #[derive(Debug, Default)]
@@ -26,9 +27,19 @@ pub struct FlameGraphState {
     selected_path: Vec<usize>,
 }
 
+impl<'a, T> FlameGraph<'a, T> {
+    pub fn new(root: &'a T) -> Self {
+        Self { root }
+    }
+}
+
 impl FlameGraphState {
     pub fn new() -> Self {
         Default::default()
+    }
+
+    pub fn selected(&self) -> &[usize] {
+        &self.selected_path
     }
 
     pub fn select_up(&mut self) {
@@ -123,12 +134,14 @@ fn render_node(node: &impl Node, area: Rect, buf: &mut Buffer, path: &mut [usize
     }
 }
 
-pub fn find_node<'a, T: Node>(node: &'a T, path: &[usize]) -> Option<&'a T> {
-    let mut curr = node;
+pub fn find_node<'a, T: Node>(root: &'a T, path: &[usize]) -> Option<&'a (T::Metadata, T)> {
+    let (&first, path) = path.split_first()?;
+    let mut curr = root.children().get(first)?;
+
     for &index in path {
-        let (_, child) = curr.children().get(index)?;
-        curr = child;
+        curr = curr.1.children().get(index)?;
     }
+
     Some(curr)
 }
 
@@ -154,8 +167,8 @@ impl MockNodeMetadata {
 }
 
 impl NodeMetadata for MockNodeMetadata {
-    fn name(&self) -> &str {
-        self.name
+    fn name(&self) -> Cow<'_, str> {
+        Cow::Borrowed(self.name)
     }
 }
 
@@ -168,5 +181,29 @@ impl Node for MockNode {
 
     fn children(&self) -> &[(Self::Metadata, Self)] {
         &self.children
+    }
+}
+
+impl<'a> Node for Tree<'a> {
+    type Metadata = Frame<'a>;
+
+    fn size(&self) -> usize {
+        self.size
+    }
+
+    fn children(&self) -> &[(Self::Metadata, Self)] {
+        &self.children
+    }
+}
+
+impl NodeMetadata for Frame<'_> {
+    fn name(&self) -> Cow<'_, str> {
+        // TODO: print address
+        Cow::Borrowed(
+            self.symbols
+                .first()
+                .and_then(|x| x.name.as_deref())
+                .unwrap_or("<unresolved>"),
+        )
     }
 }
