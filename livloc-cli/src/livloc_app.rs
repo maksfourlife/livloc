@@ -83,29 +83,6 @@ impl LivlocApp {
             handle,
         })
     }
-
-    async fn background(
-        client: reqwest::Client,
-        tree: Arc<Mutex<ParsedTree>>,
-        last_error: Arc<Mutex<Option<eyre::Report>>>,
-        tree_url: Url,
-        update_period: Duration,
-    ) -> eyre::Result<()> {
-        let mut interval = interval(update_period);
-
-        loop {
-            interval.tick().await;
-
-            let result = fetch_tree(&client, tree_url.clone()).await;
-            match result {
-                Ok(ok) => {
-                    *tree.lock().unwrap() = ok;
-                    *last_error.lock().unwrap() = None;
-                }
-                Err(err) => *last_error.lock().unwrap() = Some(err),
-            }
-        }
-    }
 }
 
 struct Background {
@@ -155,7 +132,7 @@ async fn fetch_tree(client: &reqwest::Client, tree_url: Url) -> eyre::Result<Par
 impl App for LivlocApp {
     fn draw(&mut self, frame: &mut Frame<'_>) {
         let layout =
-            Layout::vertical([Constraint::Length(3), Constraint::Fill(1)]).split(frame.area());
+            Layout::vertical([Constraint::Length(4), Constraint::Fill(1)]).split(frame.area());
 
         let tree = self.tree.lock().unwrap();
         let last_error = self.last_error.lock().unwrap();
@@ -163,7 +140,7 @@ impl App for LivlocApp {
         let flame_graph = FlameGraph::new(tree.borrow_tree());
         frame.render_stateful_widget(flame_graph, layout[1], &mut self.flame_graph_state);
 
-        let header_layout = Layout::vertical([Constraint::Length(1); 3]).split(layout[0]);
+        let header_layout = Layout::vertical([Constraint::Length(1); 4]).split(layout[0]);
 
         // render after frame so path is corrected
         if let Some((meta, node)) = find_node(tree.borrow_tree(), self.flame_graph_state.selected())
@@ -171,7 +148,7 @@ impl App for LivlocApp {
             let label_style = Style::new().bold();
 
             let line1 = Line::from_iter([
-                Span::styled("Name:", label_style),
+                Span::styled("Name: ", label_style),
                 Span::raw(
                     meta.symbols
                         .first()
@@ -183,7 +160,7 @@ impl App for LivlocApp {
 
             let line2 = Line::from_iter([
                 Span::styled("Size: ", label_style),
-                Span::raw(format!("{} ,", node.size)),
+                Span::raw(format!("{}, ", node.size)),
                 Span::styled("Count: ", label_style),
                 Span::raw(node.count.to_string()),
             ]);
@@ -200,6 +177,11 @@ impl App for LivlocApp {
             ]);
             frame.render_widget(line, header_layout[2]);
         }
+
+        frame.render_widget(
+            format!("{:?}", self.flame_graph_state.selected()),
+            header_layout[3],
+        );
     }
 
     fn handle_event(&mut self, ev: Event) -> HandleResult {
