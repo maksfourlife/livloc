@@ -6,7 +6,7 @@ use alloc::{borrow::Cow, vec::Vec};
 
 use crate::codec::{Decode, DecodeResult, Encode, Write};
 
-mod codec;
+pub mod codec;
 
 #[derive(Debug, Clone)]
 pub struct Tree<'a> {

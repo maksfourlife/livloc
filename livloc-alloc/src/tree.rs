@@ -1,6 +1,5 @@
 use std::{
     borrow::Cow,
-    io,
     sync::{
         Arc, Mutex, Weak,
         atomic::{self, AtomicUsize},
@@ -8,8 +7,8 @@ use std::{
 };
 
 use backtrace::BacktraceFrame;
-use borsh::{BorshDeserialize, BorshSerialize};
 
+#[derive(Debug)]
 pub struct Tree {
     size: AtomicUsize,
     count: AtomicUsize,
@@ -31,6 +30,8 @@ impl Tree {
         let mut curr = self;
 
         for frame in frames {
+            // TODO: filter by symbol name if filter provided
+
             curr.size.fetch_add(size, atomic::Ordering::Relaxed);
             curr.count.fetch_add(1, atomic::Ordering::Relaxed);
 
@@ -71,66 +72,39 @@ impl Tree {
         }
     }
 
-    pub fn serialize(&self, writer: &mut impl io::Write) -> io::Result<()> {
-        let size = self.size.load(atomic::Ordering::Relaxed);
-        let count = self.count.load(atomic::Ordering::Relaxed);
+    pub fn to_proto_tree(&self) -> livloc_proto::Tree<'static> {
         let children = self.children.lock().unwrap();
 
-        writer.write_all(&size.to_le_bytes())?;
-        writer.write_all(&count.to_le_bytes())?;
+        let children: Vec<_> = children
+            .iter()
+            .map(|(frame, child)| {
+                let symbols = frame
+                    .symbols()
+                    .iter()
+                    .map(|symbol| livloc_proto::Symbol {
+                        name: symbol.name().map(|x| Cow::Owned(x.to_string())),
+                        filename: symbol
+                            .filename()
+                            .map(|x| Cow::Owned(x.as_os_str().as_encoded_bytes().to_vec())),
+                        colno: symbol.colno(),
+                        lineno: symbol.lineno(),
+                    })
+                    .collect();
 
-        let tree_repr = TreeRepr {
-            size,
-            count,
-            children: children.len(),
-        };
-        borsh::to_writer(&mut *writer, &tree_repr)?;
-
-        for (frame, child) in &*children {
-            let frame_repr = FrameRepr {
-                ip: frame.ip() as usize,
-                symbol_address: frame.symbol_address() as usize,
-                symbols: frame.symbols().len(),
-            };
-            borsh::to_writer(&mut *writer, &frame_repr)?;
-
-            for symbol in frame.symbols() {
-                let symbol_repr = SymbolRepr {
-                    name: symbol.name().map(|x| x.to_string()),
-                    filename: symbol
-                        .filename()
-                        .map(|x| Cow::Borrowed(x.as_os_str().as_encoded_bytes())),
-                    colno: symbol.colno(),
-                    lineno: symbol.lineno(),
+                let frame = livloc_proto::Frame {
+                    ip: frame.ip() as usize,
+                    symbol_address: frame.symbol_address() as usize,
+                    symbols,
                 };
-                borsh::to_writer(&mut *writer, &symbol_repr)?;
-            }
 
-            child.serialize(&mut *writer)?;
+                (frame, child.to_proto_tree())
+            })
+            .collect();
+
+        livloc_proto::Tree {
+            size: self.size.load(atomic::Ordering::Relaxed),
+            count: self.count.load(atomic::Ordering::Relaxed),
+            children,
         }
-
-        Ok(())
     }
-}
-
-#[derive(BorshSerialize, BorshDeserialize)]
-struct TreeRepr {
-    size: usize,
-    count: usize,
-    children: usize,
-}
-
-#[derive(BorshSerialize)]
-struct FrameRepr {
-    ip: usize,
-    symbol_address: usize,
-    symbols: usize,
-}
-
-#[derive(BorshSerialize, BorshDeserialize)]
-struct SymbolRepr<'a> {
-    name: Option<String>,
-    filename: Option<Cow<'a, [u8]>>,
-    colno: Option<u32>,
-    lineno: Option<u32>,
 }

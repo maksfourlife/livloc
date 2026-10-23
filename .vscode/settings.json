@@ -1,4 +1,4 @@
 {
-  "rust-analyzer.cargo.features": [],
-  "cSpell.words": ["borsh", "livloc", "stringn", "wincode"]
+  "rust-analyzer.cargo.features": "all",
+  "cSpell.words": ["addrs", "borsh", "livloc", "stringn", "wincode"]
 }

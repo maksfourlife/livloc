@@ -1,0 +1,20 @@
+[package]
+name = "livloc-alloc"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+server = [
+    "dep:axum",
+    "axum/macros",
+    "axum/tokio",
+    "axum/http2",
+    "dep:tokio",
+    "tokio/net",
+]
+
+[dependencies]
+backtrace = "0.3.76"
+livloc-proto = { version = "0.1.0", path = "../livloc-proto" }
+axum = { version = "0.8.9", default-features = false, optional = true }
+tokio = { version = "1.54.1", optional = true }

@@ -6,26 +6,34 @@ use std::{
 
 use backtrace::Backtrace;
 
-use crate::allocator::{alloc_guard::AllocGuard, tree::Tree};
+use crate::{alloc_guard::AllocGuard, tree::Tree};
 
 mod alloc_guard;
 mod tree;
 
-pub struct TrackingAllocator<T> {
+#[cfg(feature = "server")]
+mod server;
+
+pub struct LivlocAlloc<T> {
     inner: T,
     tree: LazyLock<Arc<Tree>>,
 }
 
-impl<T> TrackingAllocator<T> {
+impl<T> LivlocAlloc<T> {
     pub const fn new(inner: T) -> Self {
         Self {
             inner,
             tree: LazyLock::new(|| Arc::new(Tree::new())),
         }
     }
+
+    pub fn get_tree(&self) -> livloc_proto::Tree<'static> {
+        let _guard = AllocGuard::enter();
+        self.tree.to_proto_tree()
+    }
 }
 
-unsafe impl<T> GlobalAlloc for TrackingAllocator<T>
+unsafe impl<T> GlobalAlloc for LivlocAlloc<T>
 where
     T: GlobalAlloc,
 {
