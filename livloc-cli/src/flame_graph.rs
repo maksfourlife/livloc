@@ -203,20 +203,20 @@ fn render_node(node: &impl Node, area: Rect, buf: &mut Buffer, path: &[usize], m
             let child_path = if path_contains_curr { &path[1..] } else { &[] };
 
             render_node(child, child_area, buf, child_path, count);
-
-            // TODO: maybe move outside of this if-closure?
-            // node_x += node_width + HOR_PAD;
-            node_x = node_x
-                .checked_add(node_width)
-                .ok_or_else(|| {
-                    format!(
-                        "overflow {node_x} + {node_width} ({} / {})",
-                        child.size(),
-                        node.size()
-                    )
-                })
-                .unwrap();
         }
+
+        // TODO: maybe move outside of this if-closure?
+        // node_x += node_width + HOR_PAD;
+        node_x = node_x
+            .checked_add(node_width)
+            .ok_or_else(|| {
+                format!(
+                    "overflow {node_x} + {node_width} ({} / {})",
+                    child.size(),
+                    node.size()
+                )
+            })
+            .unwrap();
     }
 }
 
@@ -315,6 +315,20 @@ fn update_path<T: Node>(root: &T, path: &mut Vec<usize>, dirs: &mut Vec<Directio
 
     // we need to search node again each time because we have no means of getting a sibling or parent
 
+    // fn position(node: &impl Node, width: u16) -> Option<usize> {
+    //     node.children().iter().position(|(_, child)| {
+    //         ((width as u128) * (child.size() as u128) / (node.size() as u128)) > 0
+    //     })
+    // }
+
+    // fn rposition(node: &impl Node, width: u16) -> Option<usize> {
+    //     node.children().iter().rposition(|(_, child)| {
+    //         ((width as u128) * (child.size() as u128) / (node.size() as u128)) > 0
+    //     })
+    // }
+
+    // TODO: what if we can't find parent node for left and right
+
     for dir in dirs.drain(..) {
         match dir {
             Direction::Left => {
@@ -323,6 +337,9 @@ fn update_path<T: Node>(root: &T, path: &mut Vec<usize>, dirs: &mut Vec<Directio
                 {
                     *index = prev;
                 }
+                // if let Some((index, parent_path)) = path.split_last()
+                //     && let Some(parent) = find_node(root, &[parent_path])
+                // {}
             }
             Direction::Right => {
                 if let Some((index, parent_path)) = path.split_last_mut()

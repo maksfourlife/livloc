@@ -5,6 +5,7 @@
     "borsh",
     "Deque",
     "livloc",
+    "rposition",
     "stringn",
     "subsec",
     "uninit",
