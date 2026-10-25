@@ -1,6 +1,5 @@
 use std::{borrow::Cow, cmp};
 
-use livloc_proto::{Frame, Tree};
 use ratatui::{
     buffer::Buffer,
     layout::{Position, Rect},
@@ -27,12 +26,51 @@ pub trait NodeMetadata {
     fn name(&self) -> Cow<'_, str>;
 }
 
+#[derive(Debug)]
+enum Direction {
+    Left,
+    Right,
+    Up,
+    Down,
+}
+
 #[derive(Debug, Default)]
 pub struct FlameGraphState {
     selected_path: Vec<usize>,
-    /// points to path segments and marks joints to view tree from
-    origins: Vec<usize>,
-    selected_pos: Option<Position>,
+    pending_dirs: Vec<Direction>,
+    pending_pos: Option<Position>,
+}
+
+struct Paths {
+    selected: Vec<usize>,
+    origin: Option<Box<Self>>,
+}
+
+impl Paths {
+    fn selected(&self) -> &[usize] {
+        &self.selected
+    }
+
+    fn origin(&self) -> &[usize] {
+        self.origin.as_ref().map(|x| &*x.selected).unwrap_or(&[])
+    }
+
+    fn push(self) -> Self {
+        Self {
+            selected: vec![],
+            origin: Some(Box::new(self)),
+        }
+    }
+
+    fn pop(self) -> Self {
+        if let Some(x) = self.origin { *x } else { self }
+    }
+}
+
+struct Frame {
+    origin_path: Vec<usize>,
+    /// path from the origin node to the selected node
+    selected_path: Vec<usize>,
 }
 
 impl<'a, T> FlameGraph<'a, T> {
@@ -47,7 +85,7 @@ impl FlameGraphState {
     }
 
     pub fn select_pos(&mut self, pos: Position) {
-        self.selected_pos = Some(pos);
+        self.pending_pos = Some(pos);
     }
 
     pub fn selected(&self) -> &[usize] {
@@ -55,37 +93,35 @@ impl FlameGraphState {
     }
 
     pub fn select_up(&mut self) {
-        self.selected_path.push(0);
+        self.pending_dirs.push(Direction::Up);
     }
 
     pub fn select_down(&mut self) {
-        self.selected_path.pop();
+        self.pending_dirs.push(Direction::Down);
     }
 
     pub fn select_left(&mut self) {
-        if let Some(last) = self.selected_path.last_mut() {
-            *last = last.saturating_sub(1);
-        }
+        self.pending_dirs.push(Direction::Left);
     }
 
     pub fn select_right(&mut self) {
-        if let Some(last) = self.selected_path.last_mut() {
-            *last = last.saturating_add(1);
-        }
+        self.pending_dirs.push(Direction::Right);
     }
 
     pub fn pop_origin(&mut self) {
-        self.origins.pop();
+        todo!()
+        // self.origins.pop();
     }
 
     pub fn push_origin(&mut self) {
-        let lesser_or_empty = match self.origins.last() {
-            Some(&last) => last < self.selected_path.len(),
-            None => true,
-        };
-        if lesser_or_empty {
-            self.origins.push(self.selected_path.len());
-        }
+        todo!()
+        // let lesser_or_empty = match self.origins.last() {
+        //     Some(&last) => last < self.selected_path.len(),
+        //     None => true,
+        // };
+        // if lesser_or_empty {
+        //     self.origins.push(self.selected_path.len());
+        // }
     }
 }
 
@@ -93,24 +129,26 @@ impl<T: Node> StatefulWidget for FlameGraph<'_, T> {
     type State = FlameGraphState;
 
     fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
-        if let Some(selected_pos) = state.selected_pos.take()
+        if let Some(selected_pos) = state.pending_pos.take()
             && let Some(path) = find_path_by_pos(self.root, area, selected_pos)
         {
             state.selected_path = path;
             // TODO: nullify all origins
         }
 
-        correct_path(self.root, &mut state.selected_path);
+        // correct_path(self.root, &mut state.selected_path);
         // TODO: correct original
-        let (origin, path) = if let Some(origin_index) = state.origins.last() {
-            let (origin_path, relative_path) = state.selected_path.split_at(*origin_index);
-            let (_, origin) = find_node(self.root, origin_path).unwrap();
-            (origin, relative_path)
-        } else {
-            (self.root, &*state.selected_path)
-        };
+        // let (origin, path) = if let Some(origin_index) = state.origins.last() {
+        //     let (origin_path, relative_path) = state.selected_path.split_at(*origin_index);
+        //     let (_, origin) = find_node_with_meta(self.root, origin_path).unwrap();
+        //     (origin, relative_path)
+        // } else {
+        //     (self.root, &*state.selected_path)
+        // };
 
-        render_node(origin, area, buf, path, 0);
+        update_path(self.root, &mut state.selected_path, &mut state.pending_dirs);
+
+        render_node(self.root, area, buf, &state.selected_path, 0);
     }
 }
 
@@ -187,8 +225,19 @@ fn render_node(node: &impl Node, area: Rect, buf: &mut Buffer, path: &[usize], m
     }
 }
 
+pub fn find_node<'a, T: Node>(root: &'a T, path: &[usize]) -> Option<&'a T> {
+    let mut curr = root;
+    for &index in path {
+        curr = &curr.children().get(index)?.1;
+    }
+    Some(curr)
+}
+
 /// Root node has no metadata
-pub fn find_node<'a, T: Node>(root: &'a T, path: &[usize]) -> Option<&'a (T::Metadata, T)> {
+pub fn find_node_with_meta<'a, T: Node>(
+    root: &'a T,
+    path: &[usize],
+) -> Option<&'a (T::Metadata, T)> {
     let (&first, path) = path.split_first()?;
     let mut curr = root.children().get(first)?;
 
@@ -199,20 +248,20 @@ pub fn find_node<'a, T: Node>(root: &'a T, path: &[usize]) -> Option<&'a (T::Met
     Some(curr)
 }
 
-fn correct_path<T: Node>(root: &T, path: &mut Vec<usize>) {
-    let mut curr = root;
-    for (i, segment) in path.iter_mut().enumerate() {
-        if let Some(max_index) = curr.children().len().checked_sub(1) {
-            *segment = cmp::min(*segment, max_index);
-            let x = &curr.children()[*segment];
-            curr = &x.1;
-        } else {
-            // children are empty
-            path.truncate(i);
-            break;
-        }
-    }
-}
+// fn correct_path<T: Node>(root: &T, path: &mut Vec<usize>) {
+//     let mut curr = root;
+//     for (i, segment) in path.iter_mut().enumerate() {
+//         if let Some(max_index) = curr.children().len().checked_sub(1) {
+//             *segment = cmp::min(*segment, max_index);
+//             let x = &curr.children()[*segment];
+//             curr = &x.1;
+//         } else {
+//             // children are empty
+//             path.truncate(i);
+//             break;
+//         }
+//     }
+// }
 
 fn find_path_by_pos<T: Node>(root: &T, area: Rect, pos: Position) -> Option<Vec<usize>> {
     fn inner<T: Node>(
@@ -269,6 +318,43 @@ fn find_path_by_pos<T: Node>(root: &T, area: Rect, pos: Position) -> Option<Vec<
     }
 }
 
+fn update_path<T: Node>(root: &T, path: &mut Vec<usize>, dirs: &mut Vec<Direction>) {
+    // TODO:
+    // [ ] skip nodes which length is zero
+    // [ ] jump to sibling
+
+    // we need to search node again each time because we have no means of getting a sibling or parent
+
+    for dir in dirs.drain(..) {
+        match dir {
+            Direction::Left => {
+                if let Some(index) = path.last_mut()
+                    && let Some(prev) = index.checked_sub(1)
+                {
+                    *index = prev;
+                }
+            }
+            Direction::Right => {
+                if let Some((index, parent_path)) = path.split_last_mut()
+                    && let Some(parent) = find_node(root, parent_path)
+                {
+                    *index = cmp::min(*index + 1, parent.children().len() - 1);
+                }
+            }
+            Direction::Up => {
+                if let Some(curr) = find_node(root, path)
+                    && !curr.children().is_empty()
+                {
+                    path.push(0);
+                }
+            }
+            Direction::Down => {
+                path.pop();
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod mock_node {
     use std::borrow::Cow;
@@ -317,8 +403,8 @@ mod mock_node {
     }
 }
 
-impl<'a> Node for Tree<'a> {
-    type Metadata = Frame<'a>;
+impl<'a> Node for livloc_proto::Tree<'a> {
+    type Metadata = livloc_proto::Frame<'a>;
 
     fn size(&self) -> usize {
         self.size
@@ -329,7 +415,7 @@ impl<'a> Node for Tree<'a> {
     }
 }
 
-impl NodeMetadata for Frame<'_> {
+impl NodeMetadata for livloc_proto::Frame<'_> {
     fn name(&self) -> Cow<'_, str> {
         // TODO: print address
         Cow::Borrowed(
@@ -341,78 +427,78 @@ impl NodeMetadata for Frame<'_> {
     }
 }
 
-#[cfg(test)]
-mod test_correct_path {
-    use crate::flame_graph::{correct_path, mock_node::MockNode};
+// #[cfg(test)]
+// mod test_correct_path {
+//     use crate::flame_graph::{correct_path, mock_node::MockNode};
 
-    #[test]
-    fn test_1_node() {
-        let node = MockNode {
-            size: 0,
-            children: vec![],
-        };
-        let mut path = vec![0];
-        correct_path(&node, &mut path);
-        assert_eq!(path, &[]);
-    }
+//     #[test]
+//     fn test_1_node() {
+//         let node = MockNode {
+//             size: 0,
+//             children: vec![],
+//         };
+//         let mut path = vec![0];
+//         correct_path(&node, &mut path);
+//         assert_eq!(path, &[]);
+//     }
 
-    #[test]
-    fn test_2_node_extra_segment() {
-        let node = MockNode {
-            size: 0,
-            children: vec![(
-                Default::default(),
-                MockNode {
-                    size: 0,
-                    children: vec![],
-                },
-            )],
-        };
-        let mut path = vec![0, 1];
-        correct_path(&node, &mut path);
-        assert_eq!(path, &[0]);
-    }
+//     #[test]
+//     fn test_2_node_extra_segment() {
+//         let node = MockNode {
+//             size: 0,
+//             children: vec![(
+//                 Default::default(),
+//                 MockNode {
+//                     size: 0,
+//                     children: vec![],
+//                 },
+//             )],
+//         };
+//         let mut path = vec![0, 1];
+//         correct_path(&node, &mut path);
+//         assert_eq!(path, &[0]);
+//     }
 
-    #[test]
-    fn test_2_nodes_index_greater() {
-        let node = MockNode {
-            size: 0,
-            children: vec![(
-                Default::default(),
-                MockNode {
-                    size: 0,
-                    children: vec![],
-                },
-            )],
-        };
-        let mut path = vec![1];
-        correct_path(&node, &mut path);
-        assert_eq!(path, &[0]);
-    }
+//     #[test]
+//     fn test_2_nodes_index_greater() {
+//         let node = MockNode {
+//             size: 0,
+//             children: vec![(
+//                 Default::default(),
+//                 MockNode {
+//                     size: 0,
+//                     children: vec![],
+//                 },
+//             )],
+//         };
+//         let mut path = vec![1];
+//         correct_path(&node, &mut path);
+//         assert_eq!(path, &[0]);
+//     }
 
-    #[test]
-    fn test_3_nodes_2nd_index_greater() {
-        let node = MockNode {
-            size: 0,
-            children: vec![(
-                Default::default(),
-                MockNode {
-                    size: 0,
-                    children: vec![(
-                        Default::default(),
-                        MockNode {
-                            size: 0,
-                            children: vec![],
-                        },
-                    )],
-                },
-            )],
-        };
-        let mut path = vec![0, 1];
-        correct_path(&node, &mut path);
-        assert_eq!(path, &[0, 0]);
-    }
-}
+//     #[test]
+//     fn test_3_nodes_2nd_index_greater() {
+//         let node = MockNode {
+//             size: 0,
+//             children: vec![(
+//                 Default::default(),
+//                 MockNode {
+//                     size: 0,
+//                     children: vec![(
+//                         Default::default(),
+//                         MockNode {
+//                             size: 0,
+//                             children: vec![],
+//                         },
+//                     )],
+//                 },
+//             )],
+//         };
+//         let mut path = vec![0, 1];
+//         correct_path(&node, &mut path);
+//         assert_eq!(path, &[0, 0]);
+//     }
+// }
 
 #[cfg(test)]
 mod test_find_path_by_pos {

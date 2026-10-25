@@ -23,7 +23,7 @@ use tokio::{task::JoinHandle, time::interval};
 
 use crate::{
     app::{App, AppEvent, HandleResult},
-    flame_graph::{FlameGraph, FlameGraphState, find_node},
+    flame_graph::{FlameGraph, FlameGraphState, find_node_with_meta},
 };
 
 pub struct LivlocApp {
@@ -143,7 +143,8 @@ impl App for LivlocApp {
         let header_layout = Layout::vertical([Constraint::Length(1); 4]).split(layout[0]);
 
         // render after frame so path is corrected
-        if let Some((meta, node)) = find_node(tree.borrow_tree(), self.flame_graph_state.selected())
+        if let Some((meta, node)) =
+            find_node_with_meta(tree.borrow_tree(), self.flame_graph_state.selected())
         {
             let label_style = Style::new().bold();
 
