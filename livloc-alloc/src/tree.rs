@@ -60,6 +60,9 @@ impl Tree {
             }
         }
 
+        curr.size.fetch_add(size, atomic::Ordering::Relaxed);
+        curr.count.fetch_add(1, atomic::Ordering::Relaxed);
+
         curr
     }
 

@@ -2,7 +2,7 @@ use alloc::{
     borrow::{Cow, ToOwned},
     vec::Vec,
 };
-use core::{convert::Infallible, str::Utf8Error};
+use core::str::Utf8Error;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DecodeError {
@@ -41,6 +41,12 @@ impl_decode_primitive!(u8, u16, u32, u64, i8, i16, i32, i64);
 impl Decode<'_> for usize {
     fn decode(data: &mut &'_ [u8]) -> DecodeResult<Self> {
         Ok(u64::decode(data)? as usize)
+    }
+}
+
+impl Decode<'_> for isize {
+    fn decode(data: &mut &'_ [u8]) -> DecodeResult<Self> {
+        Ok(i64::decode(data)? as isize)
     }
 }
 
@@ -129,7 +135,7 @@ pub trait Write {
 // manual vector impl conflicts with std::io::Write
 #[cfg(not(feature = "std"))]
 impl Write for Vec<u8> {
-    type Err = Infallible;
+    type Err = core::convert::Infallible;
 
     fn write_all(&mut self, buf: &[u8]) -> Result<(), Self::Err> {
         self.extend_from_slice(buf);
@@ -173,6 +179,12 @@ impl Encode for bool {
 impl Encode for usize {
     fn encode<W: Write>(&self, writer: &mut W) -> Result<(), W::Err> {
         (*self as u64).encode(writer)
+    }
+}
+
+impl Encode for isize {
+    fn encode<W: Write>(&self, writer: &mut W) -> Result<(), W::Err> {
+        (*self as i64).encode(writer)
     }
 }
 

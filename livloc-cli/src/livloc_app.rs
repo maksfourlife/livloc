@@ -207,6 +207,14 @@ impl App for LivlocApp {
                     self.flame_graph_state.select_down();
                     HandleResult::Processed { redraw: true }
                 }
+                KeyCode::Enter => {
+                    self.flame_graph_state.push_origin();
+                    HandleResult::Processed { redraw: true }
+                }
+                KeyCode::Char(' ') => {
+                    self.flame_graph_state.pop_origin();
+                    HandleResult::Processed { redraw: true }
+                }
                 _ => HandleResult::Skipped(ev),
             },
             _ => HandleResult::Skipped(ev),

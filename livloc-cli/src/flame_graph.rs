@@ -5,10 +5,7 @@ use ratatui::{
     buffer::Buffer,
     layout::Rect,
     style::{Color, Style},
-    widgets::{
-        StatefulWidget,
-        canvas::{Canvas, Context, Rectangle},
-    },
+    widgets::StatefulWidget,
 };
 
 pub struct FlameGraph<'a, T> {
@@ -28,6 +25,8 @@ pub trait NodeMetadata {
 #[derive(Debug, Default)]
 pub struct FlameGraphState {
     selected_path: Vec<usize>,
+    /// points to path segments and marks joints to view tree from
+    origins: Vec<usize>,
 }
 
 impl<'a, T> FlameGraph<'a, T> {
@@ -64,6 +63,20 @@ impl FlameGraphState {
             *last = last.saturating_add(1);
         }
     }
+
+    pub fn pop_origin(&mut self) {
+        self.origins.pop();
+    }
+
+    pub fn push_origin(&mut self) {
+        let lesser_or_empty = match self.origins.last() {
+            Some(&last) => last < self.selected_path.len(),
+            None => true,
+        };
+        if lesser_or_empty {
+            self.origins.push(self.selected_path.len());
+        }
+    }
 }
 
 impl<T: Node> StatefulWidget for FlameGraph<'_, T> {
@@ -71,20 +84,22 @@ impl<T: Node> StatefulWidget for FlameGraph<'_, T> {
 
     fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
         correct_path(self.root, &mut state.selected_path);
+        // TODO: correct original
+        let (origin, path) = if let Some(origin_index) = state.origins.last() {
+            let (origin_path, relative_path) = state.selected_path.split_at(*origin_index);
+            let (_, origin) = find_node(self.root, origin_path).unwrap();
+            (origin, relative_path)
+        } else {
+            (self.root, &*state.selected_path)
+        };
 
-        render_node(self.root, area, buf, &mut state.selected_path, 0);
+        render_node(origin, area, buf, path, 0);
     }
 }
 
 /// # Parameters
 /// * `path`: selected path relative to the current node
-fn render_node(
-    node: &impl Node,
-    area: Rect,
-    buf: &mut Buffer,
-    path: &mut [usize],
-    mut count: usize,
-) {
+fn render_node(node: &impl Node, area: Rect, buf: &mut Buffer, path: &[usize], mut count: usize) {
     const HOR_PAD: u16 = 0;
     const VER_PAD: u16 = 0;
     const NODE_HEIGHT: u16 = 1;
@@ -103,13 +118,21 @@ fn render_node(
         return;
     };
 
+    let max_y = area.y + area.height;
+
     let mut node_x = area.x;
 
-    let Some(node_y) = area.height.checked_sub(NODE_HEIGHT) else {
+    let Some(node_y) = max_y.checked_sub(NODE_HEIGHT) else {
         return;
     };
 
     for (i, (metadata, child)) in node.children().iter().enumerate() {
+        if child.size() > node.size() {
+            // TODO: display error or skip
+        }
+
+        // path should skip items which width is 0 (to do that need last direction)
+
         let node_width =
             (avail_width as u128 * (child.size() as u128) / (node.size() as u128)) as u16;
         let node_rect = Rect::new(node_x, node_y, node_width, NODE_HEIGHT);
@@ -132,89 +155,28 @@ fn render_node(
             Style::new().bg(bg_color).fg(FG_COLOR),
         );
 
-        let child_area = Rect::new(node_rect.x, area.y, node_width, node_y - VER_PAD);
-
-        let child_path = if path_contains_curr {
-            &mut path[1..]
-        } else {
-            &mut []
-        };
-
         count += 1;
-        render_node(child, child_area, buf, child_path, count);
 
-        node_x += node_width + HOR_PAD;
+        if let Some(child_height) = area.height.checked_sub(NODE_HEIGHT) {
+            let child_area = Rect::new(node_rect.x, area.y, node_width, child_height);
+            let child_path = if path_contains_curr { &path[1..] } else { &[] };
+
+            render_node(child, child_area, buf, child_path, count);
+
+            // node_x += node_width + HOR_PAD;
+            node_x = node_x
+                .checked_add(node_width)
+                .ok_or_else(|| {
+                    format!(
+                        "overflow {node_x} + {node_width} ({} / {})",
+                        child.size(),
+                        node.size()
+                    )
+                })
+                .unwrap();
+        }
     }
 }
-
-// #[allow(clippy::too_many_arguments)]
-// fn render_node2<T: Node>(
-//     node: &T,
-//     area_x: f64,
-//     area_y: f64,
-//     area_width: f64,
-//     area_height: f64,
-//     ctx: &mut Context<'_>,
-//     path: &mut [usize],
-//     mut count: usize,
-// ) {
-//     const HOR_PAD: f64 = 1.0;
-//     const NODE_HEIGHT: f64 = 1.0;
-
-//     const BG_COLORS: [Color; 4] = [Color::Red, Color::Yellow, Color::Magenta, Color::LightRed];
-//     const FG_COLOR: Color = Color::Black;
-
-//     let total_hor_padding = node.children().len() as f64 * HOR_PAD;
-//     let avail_width = area_width - total_hor_padding;
-
-//     if avail_width <= f64::EPSILON {
-//         return;
-//     }
-
-//     // current node x and y
-//     let mut curr_x = area_x;
-//     let curr_y = area_height - NODE_HEIGHT;
-
-//     for (i, (_metadata, child)) in node.children().iter().enumerate() {
-//         let curr_width = avail_width * (child.size() as f64) / (node.size() as f64);
-
-//         let path_contains_curr = matches!(path.first(), Some(first) if *first == i);
-//         let curr_selected = path_contains_curr && path.len() == 1;
-
-//         let bg_color = if curr_selected {
-//             Color::Blue
-//         } else {
-//             BG_COLORS[count % BG_COLORS.len()]
-//         };
-
-//         let rect = Rectangle::new(curr_x, curr_y, curr_width, NODE_HEIGHT, bg_color);
-//         ctx.draw(&rect);
-
-//         // buf.set_style(node_rect, Style::new().bg(bg_color).fg(FG_COLOR));
-//         // buf.set_stringn(s
-//         //     node_rect.x,
-//         //     node_rect.y,
-//         //     metadata.name(),
-//         //     node_rect.width as usize,
-//         //     Style::new().bg(bg_color).fg(FG_COLOR),
-//         // );
-
-//         // let child_area = Rect::new(node_rect.x, area.y, child_width, child_y - VER_PAD);
-
-//         let child_path = if path_contains_curr {
-//             &mut path[1..]
-//         } else {
-//             &mut []
-//         };
-
-//         count += 1;
-//         render_node2(
-//             child, curr_x, area_y, curr_width, curr_y, ctx, child_path, count,
-//         );
-
-//         curr_x += curr_width + HOR_PAD;
-//     }
-// }
 
 /// Root node has no metadata
 pub fn find_node<'a, T: Node>(root: &'a T, path: &[usize]) -> Option<&'a (T::Metadata, T)> {
