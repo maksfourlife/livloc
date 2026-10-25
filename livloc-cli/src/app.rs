@@ -1,6 +1,9 @@
 use std::io;
 
-use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind};
+use crossterm::{
+    ExecutableCommand,
+    event::{EnableMouseCapture, Event, EventStream, KeyCode, KeyEvent, KeyEventKind},
+};
 use futures::{
     StreamExt,
     channel::mpsc::{UnboundedSender, unbounded},
@@ -52,6 +55,8 @@ pub async fn run_app(app: &mut impl App) -> eyre::Result<()> {
     let mut stream = stream::select(events.map(EventKind::Term), receiver.map(EventKind::App));
 
     run_async(|mut term| async move {
+        term.backend_mut().execute(EnableMouseCapture)?;
+
         let mut draw = true;
 
         loop {
@@ -60,20 +65,24 @@ pub async fn run_app(app: &mut impl App) -> eyre::Result<()> {
             }
 
             match stream.next().await {
-                Some(EventKind::Term(result)) => match app.handle_event(result?) {
-                    HandleResult::Skipped(ev) => match ev {
-                        Event::Key(KeyEvent {
-                            code,
-                            kind: KeyEventKind::Press,
-                            ..
-                        }) => match code {
-                            KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
+                Some(EventKind::Term(result)) => {
+                    let ev = result?;
+                    match app.handle_event(ev) {
+                        HandleResult::Skipped(ev) => match ev {
+                            Event::Key(KeyEvent {
+                                code,
+                                kind: KeyEventKind::Press,
+                                ..
+                            }) => match code {
+                                KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
+                                _ => {}
+                            },
                             _ => {}
                         },
-                        _ => {}
-                    },
-                    HandleResult::Processed { redraw } => draw = redraw,
-                },
+
+                        HandleResult::Processed { redraw } => draw = redraw,
+                    }
+                }
                 Some(EventKind::App(AppEvent::Redraw)) => {
                     draw = true;
                 }

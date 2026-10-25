@@ -4,7 +4,7 @@ use std::{
 };
 
 use bytes::Bytes;
-use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind};
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, MouseEvent, MouseEventKind};
 use eyre::Context;
 use futures::{
     SinkExt,
@@ -217,6 +217,15 @@ impl App for LivlocApp {
                 }
                 _ => HandleResult::Skipped(ev),
             },
+            Event::Mouse(MouseEvent {
+                kind: MouseEventKind::Down(_),
+                column,
+                row,
+                ..
+            }) => {
+                self.flame_graph_state.select_pos((column, row).into());
+                HandleResult::Processed { redraw: true }
+            }
             _ => HandleResult::Skipped(ev),
         }
     }

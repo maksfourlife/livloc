@@ -3,10 +3,15 @@ use std::{borrow::Cow, cmp};
 use livloc_proto::{Frame, Tree};
 use ratatui::{
     buffer::Buffer,
-    layout::Rect,
+    layout::{Position, Rect},
     style::{Color, Style},
     widgets::StatefulWidget,
 };
+
+// TODO:
+// [ ] skip nodes which width is zero when correcting path
+// [ ] jump to sibling node when going horizontally
+// [x] select node by click
 
 pub struct FlameGraph<'a, T> {
     root: &'a T,
@@ -27,6 +32,7 @@ pub struct FlameGraphState {
     selected_path: Vec<usize>,
     /// points to path segments and marks joints to view tree from
     origins: Vec<usize>,
+    selected_pos: Option<Position>,
 }
 
 impl<'a, T> FlameGraph<'a, T> {
@@ -38,6 +44,10 @@ impl<'a, T> FlameGraph<'a, T> {
 impl FlameGraphState {
     pub fn new() -> Self {
         Default::default()
+    }
+
+    pub fn select_pos(&mut self, pos: Position) {
+        self.selected_pos = Some(pos);
     }
 
     pub fn selected(&self) -> &[usize] {
@@ -83,6 +93,13 @@ impl<T: Node> StatefulWidget for FlameGraph<'_, T> {
     type State = FlameGraphState;
 
     fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
+        if let Some(selected_pos) = state.selected_pos.take()
+            && let Some(path) = find_path_by_pos(self.root, area, selected_pos)
+        {
+            state.selected_path = path;
+            // TODO: nullify all origins
+        }
+
         correct_path(self.root, &mut state.selected_path);
         // TODO: correct original
         let (origin, path) = if let Some(origin_index) = state.origins.last() {
@@ -97,26 +114,17 @@ impl<T: Node> StatefulWidget for FlameGraph<'_, T> {
     }
 }
 
+const NODE_HEIGHT: u16 = 1;
+
 /// # Parameters
 /// * `path`: selected path relative to the current node
 fn render_node(node: &impl Node, area: Rect, buf: &mut Buffer, path: &[usize], mut count: usize) {
-    const HOR_PAD: u16 = 0;
-    const VER_PAD: u16 = 0;
-    const NODE_HEIGHT: u16 = 1;
-
     const BG_COLORS: [Color; 4] = [Color::Red, Color::Yellow, Color::Magenta, Color::LightRed];
     const FG_COLOR: Color = Color::Black;
 
     if node.size() == 0 {
         return;
     }
-
-    let total_hor_padding = node.children().len() as u16 * HOR_PAD;
-
-    let Some(avail_width) = area.width.checked_sub(total_hor_padding) else {
-        // total width is less than total width padding
-        return;
-    };
 
     let max_y = area.y + area.height;
 
@@ -134,7 +142,7 @@ fn render_node(node: &impl Node, area: Rect, buf: &mut Buffer, path: &[usize], m
         // path should skip items which width is 0 (to do that need last direction)
 
         let node_width =
-            (avail_width as u128 * (child.size() as u128) / (node.size() as u128)) as u16;
+            (area.width as u128 * (child.size() as u128) / (node.size() as u128)) as u16;
         let node_rect = Rect::new(node_x, node_y, node_width, NODE_HEIGHT);
 
         let path_contains_curr = matches!(path.first(), Some(first) if *first == i);
@@ -163,6 +171,7 @@ fn render_node(node: &impl Node, area: Rect, buf: &mut Buffer, path: &[usize], m
 
             render_node(child, child_area, buf, child_path, count);
 
+            // TODO: maybe move outside of this if-closure?
             // node_x += node_width + HOR_PAD;
             node_x = node_x
                 .checked_add(node_width)
@@ -205,44 +214,106 @@ fn correct_path<T: Node>(root: &T, path: &mut Vec<usize>) {
     }
 }
 
-#[derive(Debug, Default)]
-pub struct MockNode {
-    pub size: usize,
-    pub children: Vec<(MockNodeMetadata, Self)>,
-}
+fn find_path_by_pos<T: Node>(root: &T, area: Rect, pos: Position) -> Option<Vec<usize>> {
+    fn inner<T: Node>(
+        node: &T,
+        area: Rect,
+        pos: Position,
+        path: &mut Vec<usize>,
+        height: usize,
+    ) -> bool {
+        if node.size() == 0 {
+            return false;
+        }
 
-#[derive(Debug, Default)]
-pub struct MockNodeMetadata {
-    pub name: &'static str,
-}
+        let node_y = area.bottom() - NODE_HEIGHT; // TODO: make one check
+        // {
+        //     let mut node_rect = area;
+        //     node_rect.y = node_y;
+        //     node_rect.height = 1;
+        //     dbg!(node_rect);
+        // }
 
-impl MockNode {
-    pub fn new(size: usize, children: Vec<(MockNodeMetadata, Self)>) -> Self {
-        Self { size, children }
+        if pos.y == node_y && pos.x >= area.x && pos.x < area.right() {
+            return true;
+        }
+
+        let mut child_x = area.x;
+
+        for (i, (_, child)) in node.children().iter().enumerate() {
+            if let Some(child_area_hight) = area.height.checked_sub(1) {
+                let child_width =
+                    (area.width as u128 * (child.size() as u128) / (node.size() as u128)) as u16;
+
+                let child_area = Rect::new(child_x, area.y, child_width, child_area_hight);
+
+                path.truncate(height);
+                path.push(i);
+
+                if inner(child, child_area, pos, path, height + 1) {
+                    return true;
+                }
+
+                child_x += child_width;
+            }
+        }
+
+        false
+    }
+
+    let mut path = vec![];
+    if inner(root, area, pos, &mut path, 0) {
+        Some(path)
+    } else {
+        None
     }
 }
 
-impl MockNodeMetadata {
-    pub fn new(name: &'static str) -> Self {
-        Self { name }
-    }
-}
+#[cfg(test)]
+mod mock_node {
+    use std::borrow::Cow;
 
-impl NodeMetadata for MockNodeMetadata {
-    fn name(&self) -> Cow<'_, str> {
-        Cow::Borrowed(self.name)
-    }
-}
+    use crate::flame_graph::{Node, NodeMetadata};
 
-impl Node for MockNode {
-    type Metadata = MockNodeMetadata;
-
-    fn size(&self) -> usize {
-        self.size
+    #[derive(Debug, Default)]
+    pub struct MockNode {
+        pub size: usize,
+        pub children: Vec<(MockNodeMetadata, Self)>,
     }
 
-    fn children(&self) -> &[(Self::Metadata, Self)] {
-        &self.children
+    #[derive(Debug, Default)]
+    pub struct MockNodeMetadata {
+        pub name: &'static str,
+    }
+
+    impl MockNode {
+        pub fn new(size: usize, children: Vec<(MockNodeMetadata, Self)>) -> Self {
+            Self { size, children }
+        }
+    }
+
+    impl MockNodeMetadata {
+        pub fn new(name: &'static str) -> Self {
+            Self { name }
+        }
+    }
+
+    impl NodeMetadata for MockNodeMetadata {
+        fn name(&self) -> Cow<'_, str> {
+            Cow::Borrowed(self.name)
+        }
+    }
+
+    impl Node for MockNode {
+        type Metadata = MockNodeMetadata;
+
+        fn size(&self) -> usize {
+            self.size
+        }
+
+        fn children(&self) -> &[(Self::Metadata, Self)] {
+            &self.children
+        }
     }
 }
 
@@ -272,7 +343,7 @@ impl NodeMetadata for Frame<'_> {
 
 #[cfg(test)]
 mod test_correct_path {
-    use crate::flame_graph::{MockNode, correct_path};
+    use crate::flame_graph::{correct_path, mock_node::MockNode};
 
     #[test]
     fn test_1_node() {
@@ -340,5 +411,184 @@ mod test_correct_path {
         let mut path = vec![0, 1];
         correct_path(&node, &mut path);
         assert_eq!(path, &[0, 0]);
+    }
+}
+
+#[cfg(test)]
+mod test_find_path_by_pos {
+    use ratatui::layout::{Position, Rect};
+
+    use crate::flame_graph::{
+        find_path_by_pos,
+        mock_node::{MockNode, MockNodeMetadata},
+    };
+
+    #[test]
+    fn test_root_node() {
+        // [  5  ][ 3 ]
+        // [    8     ]
+
+        let node = MockNode::new(
+            8,
+            vec![
+                (MockNodeMetadata::new(""), MockNode::new(5, vec![])),
+                (MockNodeMetadata::new(""), MockNode::new(3, vec![])),
+            ],
+        );
+        let area = Rect::new(0, 0, 8, 2);
+        let pos = Position::new(2, 1);
+        let path = find_path_by_pos(&node, area, pos).unwrap();
+        assert_eq!(path, &[]);
+    }
+
+    #[test]
+    fn test_first_node() {
+        // [  5  ][ 3 ]
+        // [    8     ]
+
+        let node = MockNode::new(
+            8,
+            vec![
+                (MockNodeMetadata::new(""), MockNode::new(5, vec![])),
+                (MockNodeMetadata::new(""), MockNode::new(3, vec![])),
+            ],
+        );
+        let area = Rect::new(0, 0, 8, 2);
+        let pos = Position::new(2, 0);
+        let path = find_path_by_pos(&node, area, pos).unwrap();
+        assert_eq!(path, &[0]);
+    }
+
+    #[test]
+    fn test_in_the_middle() {
+        //        [ 3 ] x [ 2]
+        // [  5  ][  6   ][ 4  ]
+        // [        15         ]
+
+        let node = MockNode::new(
+            15,
+            vec![
+                (MockNodeMetadata::new(""), MockNode::new(5, vec![])),
+                (
+                    MockNodeMetadata::new(""),
+                    MockNode::new(
+                        6,
+                        vec![(MockNodeMetadata::new(""), MockNode::new(3, vec![]))],
+                    ),
+                ),
+                (
+                    MockNodeMetadata::new(""),
+                    MockNode::new(
+                        4,
+                        vec![(MockNodeMetadata::new(""), MockNode::new(2, vec![]))],
+                    ),
+                ),
+            ],
+        );
+        let area = Rect::new(0, 0, 15, 3);
+        let pos = Position::new(9, 0);
+        let result = find_path_by_pos(&node, area, pos);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_middle_node() {
+        //        [ 3 ]   [ 2]
+        // [  5  ][  6  x][ 4  ]
+        // [        15         ]
+
+        let node = MockNode::new(
+            15,
+            vec![
+                (MockNodeMetadata::new(""), MockNode::new(5, vec![])),
+                (
+                    MockNodeMetadata::new(""),
+                    MockNode::new(
+                        6,
+                        vec![(MockNodeMetadata::new(""), MockNode::new(3, vec![]))],
+                    ),
+                ),
+                (
+                    MockNodeMetadata::new(""),
+                    MockNode::new(
+                        4,
+                        vec![(MockNodeMetadata::new(""), MockNode::new(2, vec![]))],
+                    ),
+                ),
+            ],
+        );
+        let area = Rect::new(0, 0, 15, 3);
+        let pos = Position::new(8, 1);
+        let path = find_path_by_pos(&node, area, pos).unwrap();
+        assert_eq!(path, &[1]);
+    }
+
+    #[test]
+    fn test_middle_2nd_leaf() {
+        //        [ 3][3x][ 2]
+        // [  5  ][  6   ][ 4  ]
+        // [        15         ]
+
+        let node = MockNode::new(
+            15,
+            vec![
+                (MockNodeMetadata::new(""), MockNode::new(5, vec![])),
+                (
+                    MockNodeMetadata::new(""),
+                    MockNode::new(
+                        6,
+                        vec![
+                            (MockNodeMetadata::new(""), MockNode::new(3, vec![])),
+                            (MockNodeMetadata::new(""), MockNode::new(3, vec![])),
+                        ],
+                    ),
+                ),
+                (
+                    MockNodeMetadata::new(""),
+                    MockNode::new(
+                        4,
+                        vec![(MockNodeMetadata::new(""), MockNode::new(2, vec![]))],
+                    ),
+                ),
+            ],
+        );
+        let area = Rect::new(0, 0, 15, 3);
+        let pos = Position::new(8, 0);
+        let path = find_path_by_pos(&node, area, pos).unwrap();
+        assert_eq!(path, &[1, 1]);
+    }
+
+    #[test]
+    fn test_middle_node_bigger_frame() {
+        // ..................................
+        // ..................................
+        // ..       [ 3 ]   [ 2]  ...........
+        // ..[  5  ][  6  x][ 4  ]...........
+        // ..[        15         ]...........
+
+        let node = MockNode::new(
+            15,
+            vec![
+                (MockNodeMetadata::new(""), MockNode::new(5, vec![])),
+                (
+                    MockNodeMetadata::new(""),
+                    MockNode::new(
+                        6,
+                        vec![(MockNodeMetadata::new(""), MockNode::new(3, vec![]))],
+                    ),
+                ),
+                (
+                    MockNodeMetadata::new(""),
+                    MockNode::new(
+                        4,
+                        vec![(MockNodeMetadata::new(""), MockNode::new(2, vec![]))],
+                    ),
+                ),
+            ],
+        );
+        let area = Rect::new(2, 2, 15, 3);
+        let pos = Position::new(10, 3);
+        let path = find_path_by_pos(&node, area, pos).unwrap();
+        assert_eq!(path, &[1]);
     }
 }
