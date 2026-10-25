@@ -132,7 +132,7 @@ async fn fetch_tree(client: &reqwest::Client, tree_url: Url) -> eyre::Result<Par
 impl App for LivlocApp {
     fn draw(&mut self, frame: &mut Frame<'_>) {
         let layout =
-            Layout::vertical([Constraint::Length(4), Constraint::Fill(1)]).split(frame.area());
+            Layout::vertical([Constraint::Length(5), Constraint::Fill(1)]).split(frame.area());
 
         let tree = self.tree.lock().unwrap();
         let last_error = self.last_error.lock().unwrap();
@@ -144,7 +144,7 @@ impl App for LivlocApp {
 
         // render after frame so path is corrected
         if let Some((meta, node)) =
-            find_node_with_meta(tree.borrow_tree(), self.flame_graph_state.selected())
+            find_node_with_meta(tree.borrow_tree(), &self.flame_graph_state.selected())
         {
             let label_style = Style::new().bold();
 

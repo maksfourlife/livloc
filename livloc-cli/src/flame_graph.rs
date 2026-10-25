@@ -1,4 +1,4 @@
-use std::{borrow::Cow, cmp};
+use std::{borrow::Cow, cmp, mem};
 
 use ratatui::{
     buffer::Buffer,
@@ -36,23 +36,40 @@ enum Direction {
 
 #[derive(Debug, Default)]
 pub struct FlameGraphState {
-    selected_path: Vec<usize>,
+    paths: Paths,
     pending_dirs: Vec<Direction>,
     pending_pos: Option<Position>,
 }
 
+#[derive(Debug, Default)]
 struct Paths {
     selected: Vec<usize>,
     origin: Option<Box<Self>>,
 }
 
 impl Paths {
-    fn selected(&self) -> &[usize] {
+    /// selected path relative to origin
+    fn relative_selected(&self) -> &[usize] {
         &self.selected
     }
 
-    fn origin(&self) -> &[usize] {
-        self.origin.as_ref().map(|x| &*x.selected).unwrap_or(&[])
+    /// absolute path to selected
+    fn absolute_selected(&self) -> Vec<&[usize]> {
+        let mut paths = self.origin();
+        paths.push(self.relative_selected());
+        paths
+    }
+
+    /// absolute path to origin
+    fn origin(&self) -> Vec<&[usize]> {
+        let mut paths = vec![];
+        let mut curr = self;
+        while let Some(origin) = &curr.origin {
+            paths.push(&*origin.selected);
+            curr = origin;
+        }
+        paths.reverse();
+        paths
     }
 
     fn push(self) -> Self {
@@ -65,12 +82,6 @@ impl Paths {
     fn pop(self) -> Self {
         if let Some(x) = self.origin { *x } else { self }
     }
-}
-
-struct Frame {
-    origin_path: Vec<usize>,
-    /// path from the origin node to the selected node
-    selected_path: Vec<usize>,
 }
 
 impl<'a, T> FlameGraph<'a, T> {
@@ -88,8 +99,8 @@ impl FlameGraphState {
         self.pending_pos = Some(pos);
     }
 
-    pub fn selected(&self) -> &[usize] {
-        &self.selected_path
+    pub fn selected(&self) -> Vec<&[usize]> {
+        self.paths.absolute_selected()
     }
 
     pub fn select_up(&mut self) {
@@ -109,19 +120,11 @@ impl FlameGraphState {
     }
 
     pub fn pop_origin(&mut self) {
-        todo!()
-        // self.origins.pop();
+        self.paths = mem::take(&mut self.paths).pop();
     }
 
     pub fn push_origin(&mut self) {
-        todo!()
-        // let lesser_or_empty = match self.origins.last() {
-        //     Some(&last) => last < self.selected_path.len(),
-        //     None => true,
-        // };
-        // if lesser_or_empty {
-        //     self.origins.push(self.selected_path.len());
-        // }
+        self.paths = mem::take(&mut self.paths).push();
     }
 }
 
@@ -129,26 +132,18 @@ impl<T: Node> StatefulWidget for FlameGraph<'_, T> {
     type State = FlameGraphState;
 
     fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
+        // TODO: if tree changed our path may have been invalidated
+        let origin = find_node(self.root, &state.paths.origin()).unwrap();
+
         if let Some(selected_pos) = state.pending_pos.take()
-            && let Some(path) = find_path_by_pos(self.root, area, selected_pos)
+            && let Some(path) = find_path_by_pos(origin, area, selected_pos)
         {
-            state.selected_path = path;
-            // TODO: nullify all origins
+            state.paths.selected = path;
         }
 
-        // correct_path(self.root, &mut state.selected_path);
-        // TODO: correct original
-        // let (origin, path) = if let Some(origin_index) = state.origins.last() {
-        //     let (origin_path, relative_path) = state.selected_path.split_at(*origin_index);
-        //     let (_, origin) = find_node_with_meta(self.root, origin_path).unwrap();
-        //     (origin, relative_path)
-        // } else {
-        //     (self.root, &*state.selected_path)
-        // };
+        update_path(origin, &mut state.paths.selected, &mut state.pending_dirs);
 
-        update_path(self.root, &mut state.selected_path, &mut state.pending_dirs);
-
-        render_node(self.root, area, buf, &state.selected_path, 0);
+        render_node(origin, area, buf, &state.paths.selected, 0);
     }
 }
 
@@ -225,10 +220,12 @@ fn render_node(node: &impl Node, area: Rect, buf: &mut Buffer, path: &[usize], m
     }
 }
 
-pub fn find_node<'a, T: Node>(root: &'a T, path: &[usize]) -> Option<&'a T> {
+pub fn find_node<'a, T: Node>(root: &'a T, paths: &[&[usize]]) -> Option<&'a T> {
     let mut curr = root;
-    for &index in path {
-        curr = &curr.children().get(index)?.1;
+    for &path in paths {
+        for &index in path {
+            curr = &curr.children().get(index)?.1;
+        }
     }
     Some(curr)
 }
@@ -236,32 +233,25 @@ pub fn find_node<'a, T: Node>(root: &'a T, path: &[usize]) -> Option<&'a T> {
 /// Root node has no metadata
 pub fn find_node_with_meta<'a, T: Node>(
     root: &'a T,
-    path: &[usize],
+    paths: &[&[usize]],
 ) -> Option<&'a (T::Metadata, T)> {
-    let (&first, path) = path.split_first()?;
+    let (first_path, paths) = paths.split_first()?;
+
+    let (&first, first_path) = first_path.split_first()?;
     let mut curr = root.children().get(first)?;
 
-    for &index in path {
+    for &index in first_path {
         curr = curr.1.children().get(index)?;
+    }
+
+    for &path in paths {
+        for &index in path {
+            curr = curr.1.children().get(index)?;
+        }
     }
 
     Some(curr)
 }
-
-// fn correct_path<T: Node>(root: &T, path: &mut Vec<usize>) {
-//     let mut curr = root;
-//     for (i, segment) in path.iter_mut().enumerate() {
-//         if let Some(max_index) = curr.children().len().checked_sub(1) {
-//             *segment = cmp::min(*segment, max_index);
-//             let x = &curr.children()[*segment];
-//             curr = &x.1;
-//         } else {
-//             // children are empty
-//             path.truncate(i);
-//             break;
-//         }
-//     }
-// }
 
 fn find_path_by_pos<T: Node>(root: &T, area: Rect, pos: Position) -> Option<Vec<usize>> {
     fn inner<T: Node>(
@@ -336,13 +326,13 @@ fn update_path<T: Node>(root: &T, path: &mut Vec<usize>, dirs: &mut Vec<Directio
             }
             Direction::Right => {
                 if let Some((index, parent_path)) = path.split_last_mut()
-                    && let Some(parent) = find_node(root, parent_path)
+                    && let Some(parent) = find_node(root, &[parent_path])
                 {
                     *index = cmp::min(*index + 1, parent.children().len() - 1);
                 }
             }
             Direction::Up => {
-                if let Some(curr) = find_node(root, path)
+                if let Some(curr) = find_node(root, &[path])
                     && !curr.children().is_empty()
                 {
                     path.push(0);
