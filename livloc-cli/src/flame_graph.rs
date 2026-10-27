@@ -261,6 +261,11 @@ fn find_path_by_pos<T: Node>(root: &T, area: Rect, pos: Position) -> Option<Vec<
         path: &mut Vec<usize>,
         height: usize,
     ) -> bool {
+        // if position is outside of the area we won't ever reach it because we only shrink this area
+        if pos.x < area.x || pos.x >= area.right() {
+            return false;
+        }
+
         if node.size() == 0 {
             return false;
         }
@@ -273,7 +278,7 @@ fn find_path_by_pos<T: Node>(root: &T, area: Rect, pos: Position) -> Option<Vec<
         //     dbg!(node_rect);
         // }
 
-        if pos.y == node_y && pos.x >= area.x && pos.x < area.right() {
+        if pos.y == node_y {
             return true;
         }
 

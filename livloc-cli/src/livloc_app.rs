@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -10,6 +11,7 @@ use futures::{
     SinkExt,
     channel::mpsc::{Receiver, Sender, UnboundedSender, channel},
 };
+use humansize::{DECIMAL, format_size};
 use livloc_proto::{Tree, codec::Decode};
 use ouroboros::self_referencing;
 use ratatui::{
@@ -132,7 +134,7 @@ async fn fetch_tree(client: &reqwest::Client, tree_url: Url) -> eyre::Result<Par
 impl App for LivlocApp {
     fn draw(&mut self, frame: &mut Frame<'_>) {
         let layout =
-            Layout::vertical([Constraint::Length(5), Constraint::Fill(1)]).split(frame.area());
+            Layout::vertical([Constraint::Length(6), Constraint::Fill(1)]).split(frame.area());
 
         let tree = self.tree.lock().unwrap();
         let last_error = self.last_error.lock().unwrap();
@@ -140,7 +142,7 @@ impl App for LivlocApp {
         let flame_graph = FlameGraph::new(tree.borrow_tree());
         frame.render_stateful_widget(flame_graph, layout[1], &mut self.flame_graph_state);
 
-        let header_layout = Layout::vertical([Constraint::Length(1); 4]).split(layout[0]);
+        let header_layout = Layout::vertical([Constraint::Length(1); 5]).split(layout[0]);
 
         // render after frame so path is corrected
         if let Some((meta, node)) =
@@ -152,20 +154,38 @@ impl App for LivlocApp {
                 Span::styled("Name: ", label_style),
                 Span::raw(
                     meta.symbols
-                        .first()
+                        .last()
                         .and_then(|x| x.name.as_deref())
                         .unwrap_or("<unresolved>"),
                 ),
             ]);
             frame.render_widget(line1, header_layout[0]);
 
-            let line2 = Line::from_iter([
+            let location = meta
+                .symbols
+                .last()
+                .and_then(|x| {
+                    let filename = std::str::from_utf8(x.filename.as_deref()?).ok()?;
+                    let loc = if let (Some(lineno), Some(colno)) = (x.lineno, x.colno) {
+                        Cow::Owned(format!("{filename}:{lineno}:{colno}"))
+                    } else {
+                        Cow::Borrowed(filename)
+                    };
+                    Some(loc)
+                })
+                .unwrap_or(Cow::Borrowed("N/A"));
+
+            let line2 =
+                Line::from_iter([Span::styled("Location: ", label_style), Span::raw(location)]);
+            frame.render_widget(line2, header_layout[1]);
+
+            let line3 = Line::from_iter([
                 Span::styled("Size: ", label_style),
-                Span::raw(format!("{}, ", node.size)),
+                Span::raw(format!("{}, ", format_size(node.size, DECIMAL))),
                 Span::styled("Count: ", label_style),
                 Span::raw(node.count.to_string()),
             ]);
-            frame.render_widget(line2, header_layout[1]);
+            frame.render_widget(line3, header_layout[2]);
         }
 
         if let Some(err) = &*last_error {
@@ -181,7 +201,7 @@ impl App for LivlocApp {
 
         frame.render_widget(
             format!("{:?}", self.flame_graph_state.selected()),
-            header_layout[3],
+            header_layout[4],
         );
     }
 
